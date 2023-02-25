@@ -1,6 +1,7 @@
 use async_osc::{OscMessage, OscType};
 use paho_mqtt::{AsyncClient, Message};
 use serde_json::json;
+use serde::Serialize;
 
 use crate::convertions::osc_arg_to_hass;
 
@@ -23,6 +24,20 @@ impl PartialEq for HassEntity {
 }
 
 impl Eq for HassEntity {}
+
+#[derive(Serialize)]
+struct HassIntroduction {
+    name: String,
+    unique_id: String,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    device_class: Option<String>,
+    state_topic: String,
+    command_topic: String,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    value_template: Option<&'static str>,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    command_template: Option<&'static str>,
+}
 
 impl HassEntity {
     fn new(osc_message: &OscMessage) -> Self {
@@ -84,18 +99,17 @@ async fn register_device(osc_to_hass_mapping: &HassEntity, client: &AsyncClient)
         osc_to_hass_mapping.sensor_type, osc_to_hass_mapping.hass_name
     );
 
-    let hass_config = json!({
-        "name": osc_to_hass_mapping.hass_name,
-        "device_class": osc_to_hass_mapping.hass_device_class,
-        "state_topic": osc_to_hass_mapping.state_topic,
-        "command_topic": osc_to_hass_mapping.command_topic,
-        "object_id": osc_to_hass_mapping.unique_id,
-        "suggested_area": "Osc",
-        "value_template": osc_to_hass_mapping.hass_value_template,
-        "command_template": osc_to_hass_mapping.hass_command_template,
-    });
+    let hass_config = HassIntroduction {
+        name: osc_to_hass_mapping.hass_name.clone(),
+        unique_id: osc_to_hass_mapping.unique_id.clone(),
+        device_class: osc_to_hass_mapping.hass_device_class.clone(),
+        state_topic: osc_to_hass_mapping.state_topic.clone(),
+        command_topic: osc_to_hass_mapping.command_topic.clone(),
+        value_template: osc_to_hass_mapping.hass_value_template,
+        command_template: osc_to_hass_mapping.hass_command_template,
+    };
 
-    let message = Message::new(hass_config_topic, hass_config.to_string(), 0);
+    let message = Message::new(hass_config_topic, json!(hass_config).to_string(), 1);
     client.publish(message).await.unwrap();
 }
 
@@ -132,7 +146,7 @@ pub(crate) async fn update_entity_state(
         OscType::Int(i) => OscType::Int(*i.max(&0).min(&255)),
         _ => osc_arg.to_owned(),
     };
-    println!("Updating state of {} to {:?}", hass_entity.hass_name, osc_arg);
+
     let message = Message::new(&hass_entity.state_topic, osc_arg_to_hass(&osc_arg), 0);
     mqtt_client.publish(message).await.unwrap();
 }
