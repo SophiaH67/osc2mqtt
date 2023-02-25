@@ -2,96 +2,84 @@ use async_osc::{OscMessage, OscType};
 use paho_mqtt::{AsyncClient, Message};
 use serde_json::json;
 
-pub enum HassDeviceClass {
-    Motion,
-}
-
-impl HassDeviceClass {
-    fn value(&self) -> &str {
-        match *self {
-            HassDeviceClass::Motion => "motion",
-        }
-    }
-}
-
 struct OscToHass {
-    osc_address: &'static str,
     osc_type: OscType,
-    hass_name: &'static str,
-    hass_device_class: HassDeviceClass,
-    state_topic: &'static str,
+    hass_name: String,
+    sensor_type: String,
+    hass_device_class: String,
+    state_topic: String,
+    command_topic: String,
 }
 
 impl OscToHass {
-    fn sensor_type(&self) -> &'static str {
-        match self.osc_type {
-            OscType::Bool(_) => "binary_sensor",
-            OscType::Float(_) => "sensor",
-            OscType::Int(_) => "sensor",
+    fn new(osc_type: OscType, hass_name: &str) -> Self {
+        let hass_sensor_type = match osc_type {
+            OscType::Bool(_) => "switch".to_string(),
+            OscType::Float(_) => "number".to_string(),
+            OscType::Int(_) => "number".to_string(),
             _ => panic!("Unsupported OSC type"),
+        };
+        let hass_device_class = match osc_type {
+            OscType::Bool(_) => "switch".to_string(),
+            OscType::Float(_) => "None".to_string(),
+            OscType::Int(_) => "None".to_string(),
+            _ => panic!("Unsupported OSC type"),
+        };
+
+        OscToHass {
+            osc_type: osc_type.clone(),
+            hass_name: hass_name.to_string(),
+            sensor_type: hass_sensor_type.clone(),
+            hass_device_class,
+            state_topic: format!("homeassistant/{}/{}/state", hass_sensor_type, hass_name),
+            command_topic: format!("homeassistant/{}/{}/set", hass_sensor_type, hass_name),
         }
     }
 }
 
-const OSC_TO_HASS_MAPPINGS: [OscToHass; 1] = [OscToHass {
-    osc_address: "/avatar/parameters/isWristVisible",
-    osc_type: OscType::Bool(true),
-    hass_name: "garden",
-    hass_device_class: HassDeviceClass::Motion,
-    state_topic: "homeassistant/binary_sensor/garden/state",
-}];
-
-pub async fn register_devices(client: &AsyncClient) {
-    for osc_to_hass_mapping in OSC_TO_HASS_MAPPINGS {
-        register_device(osc_to_hass_mapping, &client).await;
-    }
-}
-
-async fn register_device(osc_to_hass_mapping: OscToHass, client: &AsyncClient) {
+async fn register_device(osc_to_hass_mapping: &OscToHass, client: &AsyncClient) {
     let hass_config_topic = format!(
         "homeassistant/{}/{}/config",
-        osc_to_hass_mapping.sensor_type(),
-        osc_to_hass_mapping.hass_name
+        osc_to_hass_mapping.sensor_type, osc_to_hass_mapping.hass_name
     );
+
     let hass_config = json!({
         "name": osc_to_hass_mapping.hass_name,
-        "device_class": osc_to_hass_mapping.hass_device_class.value(),
+        "device_class": osc_to_hass_mapping.hass_device_class,
         "state_topic": osc_to_hass_mapping.state_topic,
+        "command_topic": osc_to_hass_mapping.command_topic,
     });
+
     let message = Message::new(hass_config_topic, hass_config.to_string(), 0);
     client.publish(message).await.unwrap();
 }
 
 pub(crate) async fn handle_message(message: OscMessage, client: &AsyncClient) -> Result<(), &str> {
-    let osc_address = message.addr;
-    let osc_args = message.args;
+    let osc_address = message.addr.as_str().to_owned();
+    let osc_address_copy = osc_address.to_owned();
+    let osc_args = message.args.to_owned();
 
-    // Find the mapping for this OSC address
-    let osc_to_hass_mapping = OSC_TO_HASS_MAPPINGS
+    // Get the last non-empty segment of the OSC address
+    let osc_address_segments: Vec<&str> = osc_address_copy.split("/").collect();
+    let last_segment = osc_address_segments
         .iter()
-        .find(|osc_to_hass_mapping| osc_to_hass_mapping.osc_address == osc_address);
+        .rev()
+        .find(|s| !s.is_empty())
+        .unwrap();
 
-    // If we don't have a mapping for this OSC address, ignore it
-    if osc_to_hass_mapping.is_none() {
-        return Err("No mapping found for OSC address");
-    }
+    // Create a mapping from OSC address to Home Assistant device
+    let osc_to_hass_mapping = OscToHass::new(osc_args[0].to_owned(), last_segment);
 
-    // If we have a mapping, but the parameter type doesn't match, ignore it
-    // TODO
+    // Register the device with Home Assistant
+    register_device(&osc_to_hass_mapping, client).await;
 
     // If we have a mapping and the OSC message has the correct number of arguments, publish the state
     let message = Message::new(
-        osc_to_hass_mapping.unwrap().state_topic,
+        &osc_to_hass_mapping.state_topic,
         osc_arg_to_string(&osc_args[0]),
         0,
     );
     client.publish(message).await.unwrap();
-
-    println!(
-        "Published state for {}: {}",
-        osc_to_hass_mapping.unwrap().hass_name,
-        osc_arg_to_string(&osc_args[0])
-    );
 
     Ok(())
 }

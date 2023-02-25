@@ -12,7 +12,6 @@ async fn main() -> Result<()> {
         .finalize();
     client.connect(conn_opts).await.unwrap();
 
-    homeassistant::register_devices(&client).await;
     println!("Registered devices with Home Assistant");
 
     let mut socket = OscSocket::bind("127.0.0.1:9019").await?;
@@ -24,7 +23,6 @@ async fn main() -> Result<()> {
             OscPacket::Bundle(_) => {}
             OscPacket::Message(message) => {
                 // Print the address and the arguments
-                println!("{}: {:?}", message.addr, message.args);
                 homeassistant::handle_message(message, &client)
                     .await
                     .unwrap();
