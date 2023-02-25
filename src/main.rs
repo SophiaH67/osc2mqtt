@@ -4,12 +4,16 @@ use bimap::BiMap;
 use paho_mqtt as mqtt;
 mod homeassistant;
 
+const OSC_LISTEN_ADDRESS: &str = "0.0.0.0:9019";
+const OSC_SEND_ADDRESS: &str = "127.0.0.1:9000";
+const MQTT_ADDRESS: &str = "tcp://192.168.67.85:1883";
+
 #[async_std::main]
 async fn main() -> Result<()> {
     let mappings: BiMap<String, homeassistant::HassEntity> = BiMap::new();
     let mappings_mutex = Mutex::new(mappings);
 
-    let client = mqtt::AsyncClient::new("tcp://192.168.67.85:1883").unwrap();
+    let client = mqtt::AsyncClient::new(MQTT_ADDRESS).unwrap();
     let conn_opts = mqtt::ConnectOptionsBuilder::new()
         .keep_alive_interval(std::time::Duration::from_secs(20))
         .clean_session(true)
@@ -28,7 +32,7 @@ async fn osc_server(
     mappings: &Mutex<bimap::BiMap<String, homeassistant::HassEntity>>,
     client: mqtt::AsyncClient,
 ) -> Result<()> {
-    let mut socket = OscSocket::bind("127.0.0.1:9019").await?;
+    let mut socket = OscSocket::bind(OSC_LISTEN_ADDRESS).await?;
     println!("Listening on {}", socket.local_addr()?);
 
     while let Some(packet) = socket.next().await {
@@ -59,7 +63,8 @@ async fn mqtt_server(
     mut client: mqtt::AsyncClient,
 ) -> Result<()> {
     let mut mqtt_stream = client.get_stream(100);
-    let socket = OscSocket::bind("127.0.0.1:9000").await?;
+    let socket = OscSocket::bind("0.0.0.0:0").await?;
+    socket.connect(OSC_SEND_ADDRESS).await?;
 
     while let Some(message) = mqtt_stream.next().await {
         let message = message.unwrap();
