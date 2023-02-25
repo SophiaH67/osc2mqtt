@@ -125,6 +125,14 @@ pub(crate) async fn update_entity_state(
     mqtt_client: &AsyncClient,
     hass_entity: &HassEntity,
 ) {
-    let message = Message::new(&hass_entity.state_topic, osc_arg_to_hass(osc_arg), 0);
+    // If it's a float, make sure it's between -1 and 1
+    // If it's an int, make sure it's between 0 and 255
+    let osc_arg = match osc_arg {
+        OscType::Float(f) => OscType::Float(f.max(-1.0).min(1.0)),
+        OscType::Int(i) => OscType::Int(*i.max(&0).min(&255)),
+        _ => osc_arg.to_owned(),
+    };
+    println!("Updating state of {} to {:?}", hass_entity.hass_name, osc_arg);
+    let message = Message::new(&hass_entity.state_topic, osc_arg_to_hass(&osc_arg), 0);
     mqtt_client.publish(message).await.unwrap();
 }
