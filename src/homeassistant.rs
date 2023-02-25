@@ -9,7 +9,7 @@ pub struct HassEntity {
     unique_id: String,
     hass_device_class: Option<String>,
     state_topic: String,
-    command_topic: String,
+    pub command_topic: String,
 }
 
 impl PartialEq for HassEntity {
