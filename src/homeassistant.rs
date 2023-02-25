@@ -2,6 +2,8 @@ use async_osc::{OscMessage, OscType};
 use paho_mqtt::{AsyncClient, Message};
 use serde_json::json;
 
+use crate::convertions::osc_arg_to_hass;
+
 #[derive(Hash, Clone)]
 pub struct HassEntity {
     hass_name: String,
@@ -10,6 +12,8 @@ pub struct HassEntity {
     hass_device_class: Option<String>,
     state_topic: String,
     pub command_topic: String,
+    hass_value_template: Option<&'static str>,
+    hass_command_template: Option<&'static str>,
 }
 
 impl PartialEq for HassEntity {
@@ -46,6 +50,21 @@ impl HassEntity {
             _ => panic!("Unsupported OSC type"),
         };
 
+        let hass_value_template = match osc_type {
+            // If it's a float, add 1, then multiply by 50
+            OscType::Float(_) => Some("{{ (value_json | float + 1) * 50 }}"),
+            // If it's an int, divide by 2.55
+            OscType::Int(_) => Some("{{ value_json | float / 2.55 }}"),
+            _ => None,
+        };
+        let hass_command_template = match osc_type {
+            // If it's a float, divide by 50, then subtract 1
+            OscType::Float(_) => Some("{{ (value | float / 50) - 1 }}"),
+            // If it's an int, multiply by 2.55
+            OscType::Int(_) => Some("{{ value | float * 2.55 }}"),
+            _ => None,
+        };
+
         HassEntity {
             unique_id: "osc.".to_owned() + &osc_address_segments.join("_"),
             hass_name: hass_name.clone(),
@@ -53,6 +72,8 @@ impl HassEntity {
             hass_device_class: hass_device_class,
             state_topic: format!("homeassistant/{}/{}/state", hass_sensor_type, hass_name),
             command_topic: format!("homeassistant/{}/{}/set", hass_sensor_type, hass_name),
+            hass_value_template: hass_value_template,
+            hass_command_template: hass_command_template,
         }
     }
 }
@@ -70,25 +91,12 @@ async fn register_device(osc_to_hass_mapping: &HassEntity, client: &AsyncClient)
         "command_topic": osc_to_hass_mapping.command_topic,
         "object_id": osc_to_hass_mapping.unique_id,
         "suggested_area": "Osc",
+        "value_template": osc_to_hass_mapping.hass_value_template,
+        "command_template": osc_to_hass_mapping.hass_command_template,
     });
 
     let message = Message::new(hass_config_topic, hass_config.to_string(), 0);
     client.publish(message).await.unwrap();
-}
-
-fn osc_arg_to_string(osc_arg: &OscType) -> String {
-    match osc_arg {
-        OscType::Bool(value) => {
-            if *value {
-                "ON".to_string()
-            } else {
-                "OFF".to_string()
-            }
-        }
-        OscType::Float(value) => value.to_string(),
-        OscType::Int(value) => value.to_string(),
-        _ => panic!("Unsupported OSC type"),
-    }
 }
 
 pub(crate) async fn get_or_register_mapping(
@@ -113,12 +121,10 @@ pub(crate) async fn get_or_register_mapping(
 }
 
 pub(crate) async fn update_entity_state(
-    message: &OscMessage,
-    client: &AsyncClient,
+    osc_arg: &OscType,
+    mqtt_client: &AsyncClient,
     hass_entity: &HassEntity,
 ) {
-    let osc_args = message.args.to_owned();
-
-    let message = Message::new(&hass_entity.state_topic, osc_arg_to_string(&osc_args[0]), 0);
-    client.publish(message).await.unwrap();
+    let message = Message::new(&hass_entity.state_topic, osc_arg_to_hass(osc_arg), 0);
+    mqtt_client.publish(message).await.unwrap();
 }

@@ -1,9 +1,11 @@
-use async_osc::{OscMessage, OscPacket, OscSocket, OscType, Result};
+use async_osc::{OscMessage, OscPacket, OscSocket, Result};
 use async_std::{stream::StreamExt, sync::Mutex};
 use bimap::BiMap;
+use convertions::hass_arg_to_osc;
 use dotenv::dotenv;
 use paho_mqtt as mqtt;
 use std::env;
+mod convertions;
 mod homeassistant;
 
 #[async_std::main]
@@ -55,7 +57,7 @@ async fn osc_server(
                 }
                 drop(mappings);
 
-                homeassistant::update_entity_state(&message, &client, &hass_entity).await;
+                homeassistant::update_entity_state(&message.args[0], &client, &hass_entity).await;
             }
         }
     }
@@ -71,6 +73,8 @@ async fn mqtt_server(
     let mut mqtt_stream = mqtt_client.get_stream(100);
     let socket = OscSocket::bind("0.0.0.0:0").await?;
     socket.connect(osc_send_address).await?;
+
+    mqtt_client.subscribe("homeassistant/#", 1).await.unwrap();
 
     while let Some(message) = mqtt_stream.next().await {
         let message = message.unwrap();
@@ -91,27 +95,22 @@ async fn mqtt_server(
         let (osc_address, _hass_entity) = mapping.unwrap();
 
         // If the payload is ON or OFF, convert it to a boolean
-        let payload = hass_arg_to_osc(payload.to_string().as_str());
+        let payload = hass_arg_to_osc(payload.to_string());
         let packet = OscPacket::Message(OscMessage {
             addr: osc_address.to_string(),
-            args: vec![payload],
+            args: vec![payload.clone()],
         });
-        drop(mappings);
 
         // Send the OSC message
         socket
             .send(packet)
             .await
             .expect("Failed to send OSC message");
+
+        // Update the home assistant entity state
+        homeassistant::update_entity_state(&payload, &mqtt_client, &mapping.unwrap().1).await;
+        drop(mappings);
     }
 
     Ok(())
-}
-
-fn hass_arg_to_osc(arg: &str) -> OscType {
-    match arg {
-        "ON" => OscType::Bool(true),
-        "OFF" => OscType::Bool(false),
-        _ => OscType::Float(arg.parse().unwrap()),
-    }
 }
